@@ -9,6 +9,9 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
+
+#include <string>
 
 /*
  * REFERENCE: https://learn.microsoft.com/en-us/windows/win32/winsock/creating-a-basic-winsock-application
@@ -43,26 +46,15 @@
 #define ZERO_STRUCT(STRUCT_PTR) ZeroMemory(STRUCT_PTR, sizeof(*STRUCT_PTR))
 #endif // !defined(ZERO_STRUCT)
 
-size_t
-WS__CopyMemory(void *Buffer, const void *Source, size_t Size)
-{
-    if (Buffer == 0 || Source == 0 || Size == 0) {
-        return 0;
-    }
-
-    for (size_t Index = 0; Index < Size; ++Index) {
-        ((char *)Buffer)[Index] = ((const char *)Source)[Index];
-    }
-
-    return Size;
-}
 constexpr size_t
-WS__GetStringLength(const char *String)
+WS__GetStringLength(const char *String) noexcept
 {
     size_t Result = 0;
+
     while (String[Result] != 0) {
-        ++Result;
+        Result++;
     }
+
     return Result;
 }
 
@@ -70,9 +62,9 @@ struct WS__string8_view {
     const char *Data;
     size_t Length;
 
-    constexpr WS__string8_view() : Data(nullptr), Length(0) {}
-    constexpr WS__string8_view(const char *Data_) : Data(Data_), Length(WS__GetStringLength(Data_)) {}
-    constexpr WS__string8_view(const char *Data_, size_t Length_) : Data(Data_), Length(Length_) {}
+    constexpr WS__string8_view() noexcept : Data(nullptr), Length(0) {}
+    constexpr WS__string8_view(const char *Data_) noexcept : Data(Data_), Length(WS__GetStringLength(Data_)) {}
+    constexpr WS__string8_view(const char *Data_, size_t Length_) noexcept : Data(Data_), Length(Length_) {}
 };
 
 typedef WS__string8_view WS__http_version_t;
@@ -91,41 +83,6 @@ WS__GetPageSize(void) noexcept
     return pageSize;
 }
 
-void *
-WS__AllocateMemory(size_t Size) noexcept
-{
-    if (Size == 0) {
-        return 0;
-    }
-
-    void *Result = VirtualAlloc(NULL, Size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    //                              ^^^^
-    // NOTE(ilya.a): So, here I am reserving `Size` amount of bytes, but
-    // accually `VirtualAlloc` will round up this number to next page.
-    // [2024/05/26]
-    // TODO(ilya.a): Do something about waste of unused memory in Arena.
-    // [2024/05/26]
-    return Result;
-}
-
-int
-WS__FreeMemory(void *Data, size_t Size) noexcept
-{
-    UNREFERENCED_PARAMETER(Size);
-
-    if (VirtualFree(Data, 0, MEM_RELEASE) == 0) {
-        //                   ^^^^^^^^^^^^
-        // NOTE(ilya.a): Might be more reasonable to use MEM_DECOMMIT instead
-        // for MEM_RELEASE. Because in that case it's will be keep buffer
-        // around, until we use it again. P.S. Also will be good to try protect
-        // buffer after deallocating or other stuff.
-        //
-        return 1;
-    }
-
-    return 0;
-}
-
 struct WS__write_buffer {
     byte_t *Data;
     byte_t *Cursor;
@@ -133,17 +90,17 @@ struct WS__write_buffer {
 };
 
 size_t
-WS__WriteBuffer_GetWrittenBytesCount(WS__write_buffer *Buffer)
+WS__WriteBuffer_GetWrittenBytesCount(WS__write_buffer *Buffer) noexcept
 {
     return Buffer->Cursor - Buffer->Data;
 }
 
 WS__write_buffer
-WS__WriteBuffer_Allocate(size_t Capacity)
+WS__WriteBuffer_Allocate(size_t Capacity) noexcept
 {
     WS__write_buffer Result;
 
-    Result.Data = static_cast<byte_t *>(WS__AllocateMemory(Capacity));
+    Result.Data = static_cast<byte_t *>(malloc(Capacity));
     Result.Cursor = Result.Data;
     Result.Capacity = Capacity;
 
@@ -151,39 +108,42 @@ WS__WriteBuffer_Allocate(size_t Capacity)
 }
 
 void
-WS__WriteBuffer_Free(WS__write_buffer *Buffer)
+WS__WriteBuffer_Free(WS__write_buffer *Buffer) noexcept
 {
-    WS__FreeMemory(Buffer->Data, Buffer->Capacity);
+    free(Buffer->Data);
     ZERO_STRUCT(Buffer);
 }
 
 void
-WS__WriteBuffer_Zero(WS__write_buffer *Buffer)
+WS__WriteBuffer_Zero(WS__write_buffer *Buffer) noexcept
 {
     ZeroMemory(Buffer->Data, Buffer->Capacity);
 }
 
 void
-WS__WriteBuffer_Write(WS__write_buffer *Buffer, char C)
+WS__WriteBuffer_Write(WS__write_buffer *Buffer, char C) noexcept
 {
     *Buffer->Cursor = C;
     Buffer->Cursor += 1;
 }
 
 void
-WS__WriteBuffer_Write(WS__write_buffer *Buffer, const char *String)
+WS__WriteBuffer_Write(WS__write_buffer *Buffer, const char *String) noexcept
 {
-    Buffer->Cursor += WS__CopyMemory(Buffer->Cursor, String, WS__GetStringLength(String));
+    size_t StringLength = strlen(String);
+    memcpy(Buffer->Cursor, String, StringLength);
+    Buffer->Cursor += StringLength;
 }
 
 void
-WS__WriteBuffer_Write(WS__write_buffer *Buffer, const void *Source, size_t Size)
+WS__WriteBuffer_Write(WS__write_buffer *Buffer, const void *Source, size_t Size) noexcept
 {
-    Buffer->Cursor += WS__CopyMemory(Buffer->Cursor, Source, Size);
+    memcpy(Buffer->Cursor, Source, Size);
+    Buffer->Cursor += Size;
 }
 
 void
-WS__WriteBuffer_WriteFormat(WS__write_buffer *Buffer, const char *Format, ...)
+WS__WriteBuffer_WriteFormat(WS__write_buffer *Buffer, const char *Format, ...) noexcept
 {
     va_list VaArgs;
     va_start(VaArgs, Format);
@@ -196,7 +156,7 @@ WS__WriteBuffer_WriteFormat(WS__write_buffer *Buffer, const char *Format, ...)
 }
 
 void
-WS__ResetWriteBuffer(WS__write_buffer *Buffer)
+WS__ResetWriteBuffer(WS__write_buffer *Buffer) noexcept
 {
     Buffer->Cursor = Buffer->Cursor;
 }
@@ -210,7 +170,7 @@ enum class WS__http_status {
 static WS__string8_view WS__HTTP_STATUS_200_OK = "OK";
 
 void
-WS__WriteHttpStatus(WS__write_buffer *WriteBuffer, WS__http_status Status)
+WS__WriteHttpStatus(WS__write_buffer *WriteBuffer, WS__http_status Status) noexcept
 {
     const WS__string8_view *StatusToWrite = nullptr;
 
@@ -235,7 +195,7 @@ struct WS__http_response_header {
 };
 
 void
-WS__WriteHttpResponseHeader(WS__write_buffer *WriteBuffer, const WS__http_response_header *ResponseHeader)
+WS__WriteHttpResponseHeader(WS__write_buffer *WriteBuffer, const WS__http_response_header *ResponseHeader) noexcept
 {
     assert(WriteBuffer);
     assert(ResponseHeader);
@@ -251,7 +211,7 @@ WS__WriteHttpResponseHeader(WS__write_buffer *WriteBuffer, const WS__http_respon
     //
     WS__WriteBuffer_WriteFormat(WriteBuffer, "%d ", ResponseHeader->Status);
     WS__WriteHttpStatus(WriteBuffer, ResponseHeader->Status);
-    WS__WriteBuffer_Write(WriteBuffer, "\r\n\0");
+    WS__WriteBuffer_Write(WriteBuffer, "\r\n\0\r\n\0\r\n");
 }
 
 int
@@ -349,7 +309,7 @@ main(int argc, char *argv[])
     puts("I: Accepted new connection!");
 
     static const size_t ReciveBufferCapacity = WS__GetPageSize();
-    char *ReciveBuffer = static_cast<char *>(WS__AllocateMemory(ReciveBufferCapacity));
+    char *ReciveBuffer = static_cast<char *>(malloc(ReciveBufferCapacity));
     ZeroMemory(ReciveBuffer, ReciveBufferCapacity);
     assert(ReciveBuffer);
 
@@ -382,7 +342,7 @@ main(int argc, char *argv[])
                 send(ClientSocket, SendWriteBuffer.Data, WS__WriteBuffer_GetWrittenBytesCount(&SendWriteBuffer), 0);
             if (SendResult == SOCKET_ERROR) {
                 printf("E: send() failed! %d\n", WSAGetLastError());
-                assert(WS__FreeMemory(ReciveBuffer, ReciveBufferCapacity) == 0);
+                free(ReciveBuffer);
                 WS__WriteBuffer_Free(&SendWriteBuffer);
                 closesocket(ClientSocket);
                 WSACleanup();
@@ -394,7 +354,7 @@ main(int argc, char *argv[])
             puts("I: Closing connection...");
         } else {
             printf("E: recv() failed! %d\n!", WSAGetLastError());
-            assert(WS__FreeMemory(ReciveBuffer, ReciveBufferCapacity) == 0);
+            free(ReciveBuffer);
             WS__WriteBuffer_Free(&SendWriteBuffer);
             closesocket(ClientSocket);
             closesocket(ListenSocket);
@@ -409,7 +369,7 @@ main(int argc, char *argv[])
     // Cleanup
     //
     puts("I: Cleanup...");
-    assert(WS__FreeMemory(ReciveBuffer, ReciveBufferCapacity) == 0);
+    free(ReciveBuffer);
     WS__WriteBuffer_Free(&SendWriteBuffer);
     closesocket(ListenSocket);
     WSACleanup();
